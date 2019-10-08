@@ -1,0 +1,696 @@
+#####################################
+# Name of file - 2_analysis.R
+# Version of R - 3.4.0
+# Version of packages - 
+#
+# Description - 
+#
+# Approximate run time - xx minutes
+#####################################
+
+#### 1 - Housekeeping ####
+
+# Load packages
+remotes::install_github("dgrtwo/drlib")
+devtools::install_github("jaytimm/corpuslingr")
+library(janitor) # for cleaning data
+library(corpuslingr)
+library(stm)
+library(furrr)
+library(udpipe)
+library(lattice)
+library(DT)
+library(tidytext)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(tm)
+library(ggplot2)
+library(scales)
+library(ggthemes)
+library(drlib)
+library(quanteda)
+library(lubridate)
+library(broom)
+library(ggthemes)
+library(plotly)
+
+# Define words to take out 
+# Anna: would be neater and probably more managable/readable 
+# to source this in from another file
+my_words <- data.frame(word = c(
+  "oracle", "opcc", "officer", 
+  "chief", "times", "police","source","constable",
+  "commissioner","officers","Guardian", "Yorkshire", "crime",
+  "Scotland", "Telegraph", "pcc", "inspector", "guardian",
+  "force","forces", "home", "scotland","manchester",
+  "wales", "professional","people","yorkshire", "met", "live",
+  "scottish", "service","northern ireland", "england",
+  "office", "update", "mercia", "report","national",
+  "council", "west", "notingham","rank", "panel", "direct","law",
+  "government","nottinghamshire", "sussex", "dyfed", "news",
+  "uk", "fire","echo", "cleveland", "online", "telegraph", "wiltshire",
+  "inspectorate","northhamptonshire", "public","secetary","Theresa","survey",
+  "gatwick","leicestershire","northhampton","opcc","policing",
+  "midlands", "london","dorset","apcc","top", "north","plan",
+  "cash","annual", "plan", "telegraph","t","c","n","s","mr",
+  "said", "says", "qc","m","cmp", "can","year","also","us",
+  "new", "one","s","years","time","get","now","r","use","last",
+  "two","may","make","need","found","per","made", "y","k","obj",
+  "p","b","px","spa","say","cent", "mail","mailonline",
+  "background", "free","published","bbc","window","link","newsquest",
+  "website", "please", "facebook", "part","adverstising", "week",
+  "Northern","Ireland", "press","standards","organisation", "email",
+  "address","external", "links","see","just", "many", "'s","used",
+  "told", "want", "take", "added", "adele","tribute", "actsign",
+  "newsletter","weather","Hi","c","Lo","^","GOV","UK","c",
+  "Password","be","at","least","sun","security","limited",
+  "newspapers","essex","letter",
+  "withemailfacebookmessengermessengertwitterpinterestwhatsapplinkedincopy",
+  "nbsp", "amp", "gt", "lt",
+  "timesnewromanpsmt", "font",
+  "td", "li", "br", "tr", "quot",
+  "st", "img", "src", "strong","http", "file", "files", "h",
+  "?", "e", "f", "x", "?", "endobj", "WEATHER", "Home", "News",
+  "February","WEATHER","Facebook", "Twitter","york","chicago",
+  "o???", "??dn??", "datawrapper", "ltdpart", "suzy", "february",
+  "metro","pictured","contents","northernireland","cmywkproces",
+  "cookies", "site", "margin", "daily", "sunday","page","ireland",
+  "irelandnorthern",
+  "northern","price", "independent", "Independent", "skip",
+  "sent", "alerts", "password", "linkthese", "becky", "olds",
+  "minds", "create", "roads", "comment","sent", "selection","becky",
+  "grip","?efx?"
+))
+
+#### 2 - Data preparation ####
+
+# Clean html and change names to lower case
+fn_clean <- fn %>%
+  mutate(article = str_replace_all(Article, 
+                                   "&#x27;|&quot;|&#x2F;", "'"), 
+         # weird encoding
+         article = str_replace_all(Article, "<a(.*?)>", " "),        # links 
+         article = str_replace_all(Article, "&gt;|&lt;|&amp;", " "), # html yuck
+         article = str_replace_all(Article, "&#[:digit:]+;", " "),   # html yuck
+         article = str_remove_all(Article, "<[^>]*>"),
+         article = str_replace_all(Article, 
+                                   "<([[:alpha:]][[:alnum:]]*)(.[^>]*)>([.^<]*)", 
+                                   " "),
+         article = str_replace_all(Article, "\\[|\\]|\\]|\\]", " "),
+         article = str_replace_all(Article, 
+                                   "&gt;|&lt;|&amp;", " "), # more html yuck
+         article = str_replace_all(Article, "[[:punct:]]", " "),
+         article = str_replace_all(Article, "\\d+", " "),
+         article = str_replace_all(Article, "&nbsp;", " "),
+         article = str_remove_all(Article, "latin1"),
+         article = str_remove_all(Article, "ASCII"),
+         article = str_remove_all(Article, "\\b\\w{1,3}\\b"),
+         article = str_remove_all(Article, "[0-9]+"),
+         article = str_replace_all(Article, "[^[:alnum:]]", " "),
+         article = str_remove_all(Article, "@<script[^>]*?>.*?</script>@si"),
+         article = str_remove_all(Article, "@<style[^>]*?>.*?</style>@siU"),
+         article = str_remove_all(Article, "<.*?>"),
+         doc_id  = row_number()) %>% 
+  clean_names()
+
+# Create final dataframe 
+tidy_news <- fn_clean %>%
+  unnest_tokens(word, article) %>%
+  anti_join(get_stopwords()) %>%
+  anti_join(my_words) %>% 
+  mutate(date = dmy(date))
+
+
+#### 3 - Create trigrams ####
+
+tidy_bigrams <- fn_clean %>%
+  unnest_tokens(trigram, article, token = "ngrams", n = 3)%>%
+  separate(trigram, c("word1", "word2", "word3"), sep = " ")%>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>%
+  filter(!word3 %in% stop_words$word) %>%
+  filter(!word1 %in% my_words$word) %>%
+  filter(!word2 %in% my_words$word) %>%
+  filter(!word3 %in% my_words$word)
+
+#### 4 - Find out how many Topics to model on #####
+
+# Anna: I think sections like this could do with more commenting
+
+plan(multiprocess)
+
+many_models <- data_frame(K = c(20, 40, 60, 80, 100)) %>%
+  mutate(topic_model = future_map(K, 
+                                  ~stm(media_sparse, 
+                                       K = ., 
+                                       verbose = FALSE)))
+
+heldout <- make.heldout(media_sparse)
+
+k_result <- many_models %>%
+  mutate(exclusivity        = map(topic_model, exclusivity),
+         semantic_coherence = map(topic_model, semanticCoherence, media_sparse),
+         eval_heldout       = map(topic_model, eval.heldout, heldout$missing),
+         residual           = map(topic_model, checkResiduals, media_sparse),
+         bound              = map_dbl(topic_model, 
+                                      function(x) max(x$convergence$bound)),
+         lfact              = map_dbl(topic_model, 
+                                      function(x) lfactorial(x$settings$dim$K)),
+         lbound             = bound + lfact,
+         iterations         = map_dbl(topic_model,
+                                      function(x) length(x$convergence$bound)))
+
+k_result %>%
+  transmute(K,
+            `Lower bound`         = lbound,
+            Residuals             = map_dbl(residual, "dispersion"),
+            `Semantic coherence`  = map_dbl(semantic_coherence, mean),
+            `Held-out likelihood` = map_dbl(eval_heldout, 
+                                            "expected.heldout")) %>%
+  gather(Metric, Value, -K) %>%
+  ggplot(aes(K, Value, color = Metric)) +
+  geom_line(size = 1.5, alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(x        = "K (number of topics)",
+       y        = NULL,
+       title    = "Model diagnostics by number of topics",
+       subtitle = "These diagnostics indicate that a good number of topics 
+                   would be around 60")
+
+k_result %>%
+  select(K, exclusivity, semantic_coherence) %>%
+  filter(K %in% c(20, 60, 100)) %>%
+  unnest() %>%
+  mutate(K = as.factor(K)) %>%
+  ggplot(aes(semantic_coherence, exclusivity, color = K)) +
+  geom_point(size = 2, alpha = 0.7) +
+  labs(x        = "Semantic coherence",
+       y        = "Exclusivity",
+       title    = "Comparing exclusivity and semantic coherence",
+       subtitle = "Models with fewer topics have higher semantic coherence for 
+                   more topics, but lower exclusivity")
+
+
+#### 5 - National Topic Model ####
+
+dtm <- tidy_news %>%
+  corpuslingr::clr_get_freq(agg_var = c('doc_id', 'word'),
+                            toupper = FALSE)%>%
+  arrange(doc_id)
+
+static_dtm <- dtm %>%
+  tidytext::cast_sparse(row = doc_id, column = word, value = txtf)
+
+hist_topic <- topicmodels::LDA(static_dtm, 
+                               k = 20, 
+                               control = list(verbose = 0, seed = 999))
+
+
+# Tidy model for shiny
+td_beta_shiny2 <- tidy(hist_topic)
+
+
+# Create national topic summary
+
+topic_summary <- data.frame(topicmodels::terms(hist_topic, 5)) %>%
+  gather(key = 'topic', value = 'val', Topic.1:Topic.20) %>%
+  group_by(topic) %>%
+  summarize (dims = paste(val, collapse = ', ')) %>%
+  mutate(topic = as.numeric(gsub('Topic.', '', topic))) %>%
+  arrange(topic) %>%
+  bind_cols(td) 
+# these are manually created topic so bind after you have seen what is generated
+
+hist_beta <- topicmodels::posterior(hist_topic)$topics %>%
+  data.frame() %>%
+  mutate(doc_id = row_number()) %>%
+  arrange(as.numeric(doc_id)) %>%
+  left_join(tidy_news) %>%
+  gather(key = "topic", value = "val", X1:X20) %>%
+  mutate(topic = as.numeric(gsub('X', '', topic))) %>%
+  left_join(topic_summary)
+
+agg_hist_beta <- hist_beta %>%
+  group_by(date, topics, dims, paper) %>% 
+  summarize_at(vars(val), funs(sum)) %>%
+  ungroup() 
+
+# Create manaual topics
+
+topics <- as.character(c("technology & data", "drone & policy", 
+                         "inquiry & undercover", "stop search & knife crime",
+                        "Brexit & terrorism", "comments & subscribe", 
+                        "sexual abuse & victims", "recorded & crimes", 
+                        "funding & cuts","hate crime & women", 
+                        "PSNI & investigations", "death & murder", "custody", 
+                        "assitive & technology", "drugs & county lines",
+                        "crime figures & offences", "case", "local & station",
+                        "fraud & rural", "mental & health"))
+
+no <- as.numeric(1:20)
+
+td <- data.frame(topics, no)
+
+td <- rename(td, "topics" = "name", "no" = "topic")
+
+# Plot over time
+
+p <- ggplot(agg_hist_beta) +
+  geom_point(aes(x     = date, 
+                 y     = reorder(topics, -topics), 
+                 size  = val, 
+                 color = dims)) +
+  theme_fivethirtyeight() 
+
+
+plotly_build(p + geom_jitter(data = agg_hist_beta[agg_hist_beta$date == "2018-01-01",], 
+# Anna: you should be able to achieve this first line with a filter()
+                             aes(x = date, y = reorder(topics,-topics)),
+                             vjust = -1,
+                             hjust = 0) +
+               theme(legend.position = "none", 
+                     plot.title = element_text(size = 14)))
+
+# Topics
+td_beta %>%
+  group_by(topic) %>%
+  top_n(5, beta) %>%
+  arrange(topic, -beta) %>%
+  ungroup() %>%
+  mutate(topic = paste0("Topic ", topic),
+         term  = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(term, beta, fill = as.factor(topic))) +
+  geom_col(alpha = 0.8, show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free_y") +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(x        = NULL, 
+       y        = expression(beta),
+       title    = "Highest word probabilities for each topic",
+       subtitle = "Different words are associated with different topics")
+
+
+# Create regions
+
+scotland <- c("Scottish Legal News", "The Sunday Post", "The National", 
+              "The Herald", "The Scotsman", "The Scottish Sun", "STV News", 
+              "The Press and Journal", "The Courier (Scotland)", "The Ferret", 
+              "Glasgow Live","Third Force News", "The Edinburgh Reporter")
+
+england <- c("Birmingham Post", "Northern Echo", "Teeside Live", 
+             "Brighton & Hove News", "Ipswich Star", "Echo (Essex)", 
+             "East Anglican Daily Times", "The Press (York)", 
+             "Evening Standard", "Oxford Mail", "Dorset Echo", "Hull Live", 
+             "WirralGlobe", "The Yorkshire Post", 
+             "Police Federation of England and Wales (PFEW)", "Get West London")
+
+wales <- c("Northern Wales Live", "Wales Online", "South Wales Argus", 
+           "South Wales Argus", "South Wales Guardian", "Wrexham.com", 
+           "Deeside.com", "Wales 24/7", "Llanelli Herald", 
+           "Police Federation of England and Wales (PFEW)", "Halesowen News",
+           "North Wales Live")
+
+ni <- c("4NI", "Belfast Live", "Belfast Telegraph", 
+        "News Letter Northern Ireland", "The Irish News", "i News", "Derry Now")
+
+#### 6 - Northern Ireland model ####
+
+ni_dtm <- tidy_news %>%
+  dplyr::filter(paper %in% (ni)) %>%
+  corpuslingr::clr_get_freq(agg_var = c('doc_id', 'word'),
+                            toupper = FALSE) %>%
+  arrange(doc_id)
+
+ni_dtm %<>%
+  tidytext::cast_sparse(row = doc_id, column = word, value = txtf)
+
+ni_topic <- topicmodels::LDA(ni_dtm, 
+                             k = 10, 
+                             control = list(verbose = 0, seed=999))
+
+# Topics
+ni_topic_summary <- data.frame(topicmodels::terms(ni_topic, 5)) %>%
+  gather(key = 'topic', value = 'val', Topic.1:Topic.10) %>%
+  group_by(topic) %>%
+  summarize(dims = paste(val, collapse = ', ')) %>%
+  mutate(topic = as.numeric(gsub('Topic.', '', topic))) %>%
+  arrange(topic)
+
+ni_hist_beta <- topicmodels::posterior(ni_topic)$topics %>%
+  data.frame() %>%
+  mutate(doc_id = row_number()) %>%
+  left_join(tidy_news) %>%
+  gather(key = "topic", value = "val", X1:X10) %>%
+  mutate(topic = as.numeric(gsub('X', '', topic))) %>%
+  left_join(ni_topic_summary)
+
+ni_agg_hist_beta <- ni_hist_beta %>%
+  group_by(date, topic, dims) %>% 
+  summarize_at(vars(val), funs(sum))%>%
+  ungroup()
+
+# Plot topics
+ni_hist_beta%>% 
+  mutate(document = factor(dims, levels = rev(unique(dims)))) %>%
+  group_by(document) %>%
+  top_n(1) %>%
+  ungroup %>%
+  ggplot(aes(document, val, label = document, fill = as.factor(topic))) +
+  geom_col() +
+  geom_text(aes(document, 0.01), hjust = -0.1,
+            color = "white", size = 2.5) +
+  scale_y_continuous(expand = c(0, 0),
+                     labels = percent_format()) +
+  coord_flip() +
+  theme_minimal() +
+  theme(axis.text.y = element_blank()) +
+  labs(x = NULL, y = expression(val), fill = "Topic") 
+
+# Plot over time
+
+p <- ggplot(ni_agg_hist_beta) +
+  geom_point(aes(x     = date, 
+                 y     = reorder(topic,-topic), 
+                 size  = val, 
+                 color = dims)) +
+  theme_fivethirtyeight()
+
+plotly_build(p + geom_jitter(data = ni_agg_hist_beta[ni_agg_hist_beta$date == "2019-02-04",],
+                             aes(x = date, y = reorder(topic, -topic)),
+                             vjust = -1,
+                             hjust = 0) +
+               labs(title = "Topic prevalence over time", 
+                    subtitle = "01-01-2018 to 07-02-2019")+
+               theme(legend.position = "none", 
+                     plot.title = element_text(size = 14)))
+
+
+
+#### 7 - Scotland model ####
+
+scotland_dtm <- tidy_news %>%
+  dplyr::filter(paper %in% (scotland)) %>%
+  corpuslingr::clr_get_freq(agg_var = c('doc_id', 'word'),
+                            toupper = FALSE)%>%
+  arrange(doc_id)
+
+scotland_dtm %<>%
+  filter(docf < 500 & docf > 5) %>%
+  tidytext::cast_sparse(row = doc_id, column = word, value = txtf)
+
+scotland_topic <- topicmodels::LDA(scotland_dtm, 
+                                   k = 10, 
+                                   control = list(verbose = 0, seed = 999))
+
+# Create topics
+
+s_td_beta <- tidy(scotland_topic)
+
+s_topic_summary <- data.frame(topicmodels::terms(scotland_topic, 5)) %>%
+  gather(key='topic',value='val',Topic.1:Topic.10) %>%
+  group_by(topic) %>%
+  summarize (dims = paste(val, collapse=', ')) %>%
+  mutate(topic = as.numeric(gsub('Topic.', '', topic))) %>%
+  arrange(topic)
+
+s_hist_beta <- topicmodels::posterior(scotland_topic)$topics %>%
+  data.frame() %>%
+  mutate(doc_id = row_number()) %>%
+  left_join(tidy_news) %>%
+  gather(key = "topic", value = "val", X1:X10) %>%
+  mutate(topic = as.numeric(gsub('X', '', topic))) %>%
+  left_join(topic_summary)
+
+s_agg_hist_beta <- hist_beta %>%
+  group_by(date,topic,dims) %>% 
+  summarize_at(vars(val),funs(sum)) %>%
+  ungroup()
+
+# Plot topics
+
+s_hist_beta %>% 
+  mutate(document = factor(dims, levels = rev(unique(dims)))) %>%
+  group_by(document) %>%
+  top_n(1) %>%
+  ungroup %>%
+  ggplot(aes(document, val, label = document, fill = as.factor(topic))) +
+  geom_col() +
+  geom_text(aes(document, 0.01), hjust = -0.1,
+            color = "white", size = 2.5) +
+  scale_y_continuous(expand = c(0, 0),
+                     labels = percent_format()) +
+  coord_flip() +
+  theme_minimal() +
+  theme(axis.text.y=element_blank()) +
+  labs(x = NULL, y = expression(val), fill = "Topic") 
+
+# Over time
+
+p <- ggplot(s_agg_hist_beta) +
+  geom_point(aes(x     = date, 
+                 y     = reorder(topic,-topic), 
+                 size  = val, 
+                 color = dims)) +
+  theme_fivethirtyeight()
+
+plotly_build(p + geom_jitter(data = agg_hist_beta[agg_hist_beta$date == "2018-01-01",],
+                             aes(x = date, y = reorder(topic, -topic)),
+                             vjust = -1,
+                             hjust = 0) +
+               labs(title    = "Topic prevalence over time", 
+                    subtitle = "01-01-2018 to 07-02-2019")+
+               theme(legend.position = "none", 
+                     plot.title = element_text(size=14)))
+
+#### 8 - England ####
+england_dtm <- tidy_news %>%
+  dplyr::filter(paper %in% (england)) %>%
+  corpuslingr::clr_get_freq(agg_var = c('doc_id', 'word'),
+                            toupper = FALSE)%>%
+  arrange(doc_id)
+
+england_dtm %<>%
+  filter(docf < 500 & docf > 5) %>%
+  tidytext::cast_sparse(row = doc_id, column = word, value = txtf)
+
+england_topic <- topicmodels::LDA(england_dtm, 
+                                  k = 10, 
+                                  control = list(verbose = 0, seed = 999))
+
+# Topics
+
+e_td_beta <- tidy(england_topic)
+
+e_topic_summary <- data.frame(topicmodels::terms(england_topic, 5)) %>%
+  gather(key = 'topic', value = 'val', Topic.1:Topic.10) %>%
+  group_by(topic) %>%
+  summarize (dims = paste(val, collapse = ', ')) %>%
+  mutate(topic = as.numeric(gsub('Topic.', '', topic))) %>%
+  arrange(topic)
+
+e_hist_beta <- topicmodels::posterior(england_topic)$topics %>%
+  data.frame() %>%
+  mutate(doc_id = row_number()) %>%
+  left_join(tidy_news) %>%
+  gather(key = "topic", value = "val", X1:X10) %>%
+  mutate(topic = as.numeric(gsub('X', '', topic))) %>%
+  left_join(topic_summary)
+
+e_agg_hist_beta <- hist_beta %>%
+  dplyr::filter(paper %in% (england)) %>%
+  group_by(date, topic, dims) %>% 
+  summarize_at(vars(val), funs(sum)) %>%
+  ungroup()
+
+# Plot topics
+
+e_hist_beta%>% 
+  mutate(document = factor(dims, levels = rev(unique(dims)))) %>%
+  group_by(document) %>%
+  top_n(1) %>%
+  ungroup %>%
+  ggplot(aes(document, val, label = document, fill = as.factor(topic))) +
+  geom_col() +
+  geom_text(aes(document, 0.01), hjust = -0.1,
+            color = "white", size = 2.5) +
+  scale_y_continuous(expand = c(0, 0),
+                     labels = percent_format()) +
+  coord_flip() +
+  theme_minimal() +
+  theme(axis.text.y = element_blank()) +
+  labs(x = NULL, y = expression(val), fill = "Topic")
+
+
+# Over time
+
+p <- ggplot(e_agg_hist_beta) +
+  geom_point(aes(x     = date, 
+                 y     = reorder(topic, -topic), 
+                 size  = val, 
+                 color = dims)) +
+  theme_fivethirtyeight()
+
+plotly_build(p + geom_jitter(data = agg_hist_beta[agg_hist_beta$date == "2018-01-01",],
+                             aes(x = date, y = reorder(topic, -topic)),
+                             vjust = -1,
+                             hjust = 0) +
+               labs(title    = "Topic prevalence over time", 
+                    subtitle = "01-01-2018 to 07-02-2019")+
+               theme(legend.position = "none", 
+                     plot.title = element_text(size = 14)))
+
+#### 9 - Wales ####
+
+wales_dtm <- tidy_news %>%
+  dplyr::filter(Paper %in% (wales)) %>%
+  corpuslingr::clr_get_freq(agg_var = c('doc_id', 'word'),
+                            toupper = FALSE) %>%
+  arrange(doc_id)
+
+wales_dtm %<>%
+  filter(docf < 500 & docf > 2) %>%
+  tidytext::cast_sparse(row = doc_id, column = word, value = txtf)
+
+wales_topic <- topicmodels::LDA(wales_dtm, 
+                                k = 10, 
+                                control = list(verbose = 0, seed = 999))
+
+# Topics
+
+w_td_beta <- tidy(wales_topic)
+
+w_topic_summary <- data.frame(topicmodels::terms(wales_topic, 5)) %>%
+  gather(key = 'topic', value = 'val', Topic.1:Topic.10) %>%
+  group_by(topic) %>%
+  summarize(dims = paste(val, collapse = ', ')) %>%
+  mutate(topic = as.numeric(gsub('Topic.', '', topic))) %>%
+  arrange(topic)
+
+w_hist_beta <- topicmodels::posterior(wales_topic)$topics %>%
+  data.frame() %>%
+  mutate(doc_id = row_number()) %>%
+  left_join(tidy_news) %>%
+  gather(key = "topic", value = "val", X1:X10) %>%
+  mutate(topic = as.numeric(gsub('X', '', topic))) %>%
+  left_join(topic_summary)
+
+w_agg_hist_beta <- w_hist_beta %>%
+  dplyr::filter(paper %in% (wales)) %>%
+  group_by(date, topic, dims) %>% 
+  summarize_at(vars(val), funs(sum)) %>%
+  ungroup()
+
+# Plot topics
+
+w_hist_beta%>% 
+  mutate(document = factor(dims, levels = rev(unique(dims)))) %>%
+  group_by(document) %>%
+  top_n(1) %>%
+  ungroup %>%
+  ggplot(aes(document, val, label = document, fill = as.factor(topic))) +
+  geom_col() +
+  geom_text(aes(document, 0.01), hjust = -0.1,
+            color = "white", size = 2.5) +
+  scale_y_continuous(expand = c(0, 0),
+                     labels = percent_format()) +
+  coord_flip() +
+  theme_minimal() +
+  theme(axis.text.y = element_blank()) +
+  labs(x = NULL, y = expression(val), fill = "Topic")
+
+# Plot over time
+
+p <- ggplot(w_agg_hist_beta) +
+  geom_point(aes(x     = date, 
+                 y     = reorder(topic,-topic), 
+                 size  = val, 
+                 color = dims)) +
+  theme_fivethirtyeight()
+
+plotly_build(p + geom_jitter(data = agg_hist_beta[agg_hist_beta$date == "2018-01-01",],
+                             aes(x = date, y = reorder(topic, -topic)),
+                             vjust = -1,
+                             hjust = 0) +
+               labs(title    = "Topic prevalence over time", 
+                    subtitle = "01-01-2018 to 07-02-2019") +
+               theme(legend.position = "none", 
+                     plot.title = element_text(size = 14)))
+
+
+#### 10 - Grammar and parts of speech ####
+
+model <- udpipe_download_model(language = "english")
+str(model)
+udmodel_english <- udpipe_load_model(file = model$file_model)
+x <- udpipe_annotate(udmodel_english, x = tidy_news$word)
+x <- as.data.frame(x)
+
+
+dtmstats <- txt_freq(x$upos)
+stats$key <- factor(stats$key, levels = rev(stats$key))
+barchart(key ~ freq, 
+         data = stats, 
+         col = "yellow", 
+         main = "UPOS (Universal Parts of Speech)\n frequency of occurrence", 
+         xlab = "Freq")
+
+
+# NOUNS
+stats <- subset(x, upos %in% c("noun")) 
+stats <- txt_freq(stats$token)
+stats$key <- factor(stats$key, levels = rev(stats$key))
+barchart(key ~ freq, 
+         data = head(stats, 20), 
+         col  = "cadetblue", 
+         main = "Most occurring nouns", 
+         xlab = "Freq")
+
+# ADJECTIVES
+stats <- subset(x, upos %in% c("adj")) 
+stats <- txt_freq(stats$token)
+stats$key <- factor(stats$key, levels = rev(stats$key))
+barchart(key ~ freq, 
+         data = head(stats, 20), 
+         col  = "purple", 
+         main = "Most occurring adjectives", 
+         xlab = "Freq")
+
+# VERBS
+stats <- subset(x, upos %in% c("verb")) 
+stats <- txt_freq(stats$token)
+stats$key <- factor(stats$key, levels = rev(stats$key))
+barchart(key ~ freq, 
+         data = head(stats, 20), 
+         col = "gold", 
+         main = "Most occurring Verbs", 
+         xlab = "Freq")
+
+
+# Keyword phrases
+x$phrase_tag <- as_phrasemachine(x$upos, type = "upos")
+stats <- keywords_phrases(x = x$phrase_tag, 
+                          term = tolower(x$token), 
+                          pattern = "(A|N)*N(P+D*(A|N)*N)*", 
+                          is_regex = TRUE, 
+                          detailed = FALSE)
+stats <- subset(stats, ngram > 1 & freq > 4)
+stats$key <- factor(stats$keyword, levels = rev(stats$keyword))
+barchart(key ~ freq, 
+         data = head(stats, 9), 
+         col  = "steel blue", 
+         xlab = "Frequency")
+
+
+
+#### 11 - Table search text ####
+
+article <- as.data.frame(fn_clean$article)
+
+datatable(article, 
+          extensions = 'Scroller', 
+          options    = list(searchHighlight = TRUE),
+          colnames   = c('Articles' = 1, "Body" = 2),
+          caption    = 'Table 1: Scraped articles about crime & policing')
+
+#### END OF SCRIPT ####
