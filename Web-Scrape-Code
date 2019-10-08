@@ -1,0 +1,119 @@
+#####################################
+# Name of file - 1_web_scrape.R
+# Version of R - 3.4.0
+# Version of packages - 
+#
+# Description - 
+#
+# Approximate run time - xx minutes
+#####################################
+
+#### 1 - Housekeeping ####
+
+# Load packages
+library(devtools)
+library(RSelenium) # for interacting with a browser as a user would
+library(XML)
+library(plyr)
+library(rvest)
+library(stringr)
+library(dplyr)
+library(purrr)
+library(RCurl)
+
+# Set up browser
+rd <- rsDriver(browser = "chrome")
+
+# Driver required to use Chrome
+rem_dr <- rd[["client"]]
+
+# Website and password
+url <- "https://policinginsight.com/log-in/"
+rem_dr$navigate(url) # Navigate to login page
+mail <- rem_dr$findElement(using = "name", 
+                           value = "login[user_email]")
+mail$sendKeysToElement(list("**********"))
+password <- rem_dr$findElement(using = "name",
+                               value = "login[user_password]")
+password$sendKeysToElement(list("*******", key = "enter"))
+
+# url to scrape
+url <- ("https://policinginsight.com/media-monitor/")
+
+# use driver to access url remotely
+rem_dr$navigate(url)
+
+# Blank table for data
+a <- c(NA)
+b <- c(NA)
+c <- c(NA)
+
+#### 2 - Collect links ####
+
+# TO DO: add comment to explain why page is set to 2
+page <- 2
+
+for(i in 1:page){
+ link <- paste0(url, "page/", i, "/")
+ rem_dr$navigate(link)
+ Sys.sleep(5)
+ hlink <- read_html(rem_dr$getPageSource()[[1]])
+ hlink %>%
+ html_nodes(".td-link a")%>% 
+ html_attr("href") -> links
+ a <- c(a, links)
+ hlink %>%
+   html_nodes(".td-data > .alignright")%>%
+   html_text() -> date
+ b <- c(b, date)
+ hlink %>%
+   html_nodes("a b.blue")%>%
+   html_text() -> paper
+ c <- c(c, paper)
+}
+
+# Delete blanks
+a[2:length(a)] -> a
+b[2:length(b)] -> b
+c[2:length(c)] -> c
+
+# Create data frames
+links <- data.frame(a, stringsAsFactors = FALSE)
+dates <- data.frame(b, stringsAsFactors = FALSE)
+paper <- data.frame(c, stringsAsFactors = FALSE)
+final_df <- bind_cols(dates, paper, links)
+
+# Close server and browser
+rem_dr$close()
+rem_dr$closeServer()
+rem_dr$quit
+rem_dr$closeall
+
+#### 3 - Scrape links to get articles ####
+
+detail_content1 <- (sapply(a, function(url){
+  tryCatch(
+    url %>% 
+      read_html() %>% 
+      html_nodes('p') %>% 
+      html_text() %>%
+      paste(., collapse = ""),
+    error <- function(e){NA}
+    # a function that returns NA regardless of what it's passed
+  )
+}))
+
+# Create data frame of all columns
+f <- as.data.frame(detail_content1)
+g <- as.data.frame(a)
+h <- as.data.frame(c)
+i <- as.data.frame(b)
+
+fn <- bind_cols(h, g, f, i)
+
+names(fn)[1] <- "paper"
+names(fn)[2] <- "link"
+names(fn)[3] <- "article"
+names(fn)[4] <- "date"   
+
+#### END OF SCRIPT ####
