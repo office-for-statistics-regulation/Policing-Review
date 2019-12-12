@@ -1,0 +1,297 @@
+---
+title: "Media Analysis"
+runtime: shiny
+output: 
+  flexdashboard::flex_dashboard:
+    source_code: embed
+    orientation: columns
+    vertical_layout: fill
+
+
+---
+```{r global, include=FALSE}
+ 
+
+library(flexdashboard)
+library(shiny)
+library(dplyr)
+library(stm)
+library(quanteda)
+library(ggthemes)
+library(tidyverse)
+library(ggplot2)
+library(scales)
+library(shinythemes)
+library(DT)
+library(statnet.common)
+library(reticulate)
+library(rsconnect)
+library(lattice)
+library(udpipe)
+library(plotly)
+
+load("tidy_news.Rda")
+load("td_beta_shiny2.Rda")
+load("agg_hist_beta.Rda")
+load("Model_Final2.Rda")
+load("trigram.Rda")
+load("shinystats.Rda")
+```
+
+Instructions
+=======================================================================
+
+Column 
+-------------------------------------
+### Whats this dashboard about
+
+```{r}
+valueBox(1, caption = paste("Click for overview", actionButton("button1", " ", style = "background-color:rgba(39, 128, 227, 0.0); border-color:rgba(39, 128, 227, 0.0); position: absolute; overflow: hidden; left: 0px; top: 0px; right: 0px; bottom: 0px; width:100%"),color = NULL))
+```
+
+### valueBox 2
+```{r}
+valueBox( 2,caption = paste("Tab one overview", actionButton("button2", " ", style = "background-color:rgba(39, 128, 227, 0.0); border-color:rgba(39, 128, 227, 0.0); position: absolute; overflow: hidden; left: 0px; top: 0px; right: 0px; bottom: 0px; width:100%")), color = NULL)
+```
+
+### valueBox 3
+```{r}
+valueBox( 3,caption = paste("Tab two overview", actionButton("button3", " ", style = "background-color:rgba(0, 0, 0, 0.0); border-color:rgba(0, 0, 0, 0.0); position: absolute; overflow: hidden; left: 0px; top: 0px; right: 0px; bottom: 0px; width:100%")), color = NULL)
+```
+
+### valueBox 4
+```{r}
+valueBox(4,caption = paste("Tab three overview", actionButton("button4", " ", style = "background-color:rgba(0, 0, 0, 0.0); border-color:rgba(0, 0, 0, 0.0); position: absolute; overflow: hidden; left: 0px; top: 0px; right: 0px; bottom: 0px; width:100%")),color = NULL)
+```
+
+### valueBox 5
+```{r}
+valueBox(5,caption = paste("Tab four overview", actionButton("button5", " ", style = "background-color:rgba(0, 0, 0, 0.0); border-color:rgba(0, 0, 0, 0.0); position: absolute; overflow: hidden; left: 0px; top: 0px; right: 0px; bottom: 0px; width:100%")),color = NULL)
+```
+
+### valueBox 6
+```{r}
+valueBox(6,caption = paste("Tab five overview", actionButton("button6", " ", style = "background-color:rgba(0, 0, 0, 0.0); border-color:rgba(0, 0, 0, 0.0); position: absolute; overflow: hidden; left: 0px; top: 0px; right: 0px; bottom: 0px; width:100%")),color = NULL)
+```
+
+### valueBox 7
+```{r}
+valueBox(7, caption = paste("Tab six overview", actionButton("button7", " ", style = "background-color:rgba(0, 0, 0, 0.0); border-color:rgba(0, 0, 0, 0.0); position: absolute; overflow: hidden; left: 0px; top: 0px; right: 0px; bottom: 0px; width:100%")), color = NULL)
+```
+
+Column
+-------------------------------------
+
+### Text output
+```{r}
+textOutput("textout")
+
+rv <- reactiveValues(data = NULL)
+
+observeEvent(input$button1, {
+rv$data <- "This dashboard shows some of the topic analysis charts we used to gain a better understanding of the key themes being discussed around policng in local and national media outlets.
+
+Topic modeling is a method for unsupervised classification of text documents, which finds natural groups of items when we’re not sure what we’re looking for.
+
+This app explores the results of a [Structural Topic Model](http://www.structuraltopicmodel.com/)
+for the 2,500 news artciles we scrapped from Polcing Insight."
+})
+
+observeEvent(input$button2, {
+rv$data <- "Page one shows the strength of word contirbution to each topic, with the strongest topic being funding and cuts."
+})
+
+observeEvent(input$button3, {
+rv$data <- "Page two looks at the prevelance of topics over time, allowing us to understand at which points throughout the year topics became stronger."
+})  
+
+observeEvent(input$button4, {
+rv$data <- "Page three allows you to see which words contirbute to each topic in more detail."
+})  
+
+observeEvent(input$button5, {
+rv$data <- "In page four we have looked at which median outlets is a topic most likley to come from. This allows us to understand the geograhpical distribtuion of certain topics."
+})  
+
+observeEvent(input$button6, {
+rv$data <- "Page five shows the top nine key phrases generated from our data, this was done using the UDpipe package."
+}) 
+
+observeEvent(input$button7, {
+rv$data <- "Page six contains word analysis which allows you to see the common words proceeding a word you type."
+})
+
+
+output$textout <- renderText({
+  rv$data
+})
+
+```
+
+Topics {data-icon="fa-bar-chart"}
+=====================================================================
+
+### 20 Topics and highest contibuting words {data-height=800}
+
+```{r}
+agg_hist_beta %>% 
+mutate(document = factor(topics, levels =  rev(unique(topics))))%>%
+group_by(document) %>%
+top_n(1) %>%
+ungroup %>%
+ggplot(aes(x = reorder(document, val), y = val, label = document)) +
+                       geom_col(fill = "steelblue") + 
+                       geom_text(aes(document, 0.01), hjust = 0,
+                                 color = "black", size = 5) + 
+                       coord_flip() +
+                       scale_fill_viridis_d() +
+                       theme_minimal() +
+                       theme(axis.text.y=element_blank()) +
+                       labs(x = NULL, y = expression(gamma), fill = "Topic")   
+
+```
+
+Topic prevelance {data-icon=fa-analytics}
+====================================================================
+
+### The prevelance of different topics over time
+
+```{r}
+shinyApp(
+  ui <- fillPage(
+    plotlyOutput("plot", height = "100%")
+  ),
+
+  server <- function(input, output) {
+    
+    output$plot <- renderPlotly({
+      p <- ggplot(agg_hist_beta) +
+        geom_point(aes(x = Date, 
+                       y = reorder(topics,-topics), 
+                       size = val, 
+                       color=dims)) +
+        theme_fivethirtyeight() 
+      p + geom_jitter(data = agg_hist_beta[agg_hist_beta$Date == "2018-01-01",], 
+                             aes(x = Date, y = reorder(topics,-topics)),
+                             vjust= -1,
+                             hjust= 0) +
+        labs(title="Topic prevalence over time", 
+             subtitle="2018-01-01 to 2019-02-07")+
+               theme(legend.position="none", 
+                     plot.title = element_text(size=14))})})
+```
+
+Words by topic {data-icon="fa-list"}
+====================================================================
+
+### Which words have the highest probability of being generated from each topic?
+
+```{r}
+
+ shinyApp(
+    ui = fluidPage(
+fillCol(height = 600, flex = c(NA, 1), 
+  inputPanel(
+    selectizeInput("topic2", "Choose a topic", choices = unique(td_beta_shiny2$topic))
+  ),
+  plotOutput("topicPlot", height = "100%")
+)
+),
+
+server = function(input, output) {
+output$topicPlot <- renderPlot({
+    td_beta_shiny2 %>%
+        filter(topic == as.integer(input$topic2)) %>%
+        top_n(15, beta) %>%
+        mutate(term = reorder(term, beta)) %>%
+        ggplot(aes(term, beta, fill = beta)) +
+        geom_col(show.legend = FALSE) +
+        scale_fill_gradient(low = "#5FBA7D", high = "#108AEC") +
+        scale_y_continuous(expand = c(0,0),
+                           labels = percent_format()) +
+        coord_flip() +
+        theme_minimal(base_size = 18) +
+        labs(x = NULL, y = expression(beta))
+})
+})
+
+```
+
+
+
+Explore media {data-icon="fa-list"}
+====================================================================
+
+### Which meida is a topic most likely to be generated from?
+
+```{r}
+
+ shinyApp(
+    ui = fillCol(height = 600, flex = c(NA, 1), 
+  inputPanel(
+    selectizeInput("Paper", "Choose a paper", choices = unique(agg_hist_beta$Paper))
+  ),
+  plotOutput("wordPlot", height = "100%")
+),
+
+server = function(input, output) {
+output$wordPlot <- renderPlot({
+    agg_hist_beta %>% 
+        filter(Paper == input$Paper) %>% 
+        arrange(-val) %>% 
+        top_n(10) %>% 
+        mutate(topic = reorder(topics, val)) %>%
+        ggplot(aes(topic, val, fill = val)) +
+        geom_col(show.legend = FALSE) +
+        scale_fill_gradient(low = "#5FBA7D", high = "#108AEC") +
+        scale_y_continuous(expand = c(0,0),
+                           labels = NULL) +
+        coord_flip() +
+        theme_minimal(base_size = 18) +
+        labs(x = NULL, y = expression(Prevelance))
+})
+
+})
+```
+
+Key phrases {data-icon="fa-quote-right"}
+====================================================================
+
+### Key word phrases
+
+```{r}
+
+barchart(key ~ freq, data = head(stats, 9), col = "steel blue", 
+         main = "Key Phrases", 
+          xlab = "Frequency",
+         ylab = "Key phrases")
+```
+
+Ngram Analysis {data-icon="fa-search"}
+====================================================================
+
+### Trigram analysis
+
+```{r}
+
+shinyApp(
+ui <- fluidPage(
+  textInput("plot", "words that follow",NULL),
+  DT::dataTableOutput('trigram')
+),
+
+server <- function(input, output) {
+  output$trigram <- DT::renderDataTable({
+    p <- input$plot
+    if(p != '')
+      trigram %>% filter(Reduce(`&`, lapply(strsplit(p,' ')[[1]], grepl, trigram,ignore.case=T)))
+    else
+      trigram 
+  })
+})
+
+```
+
+
+
+
